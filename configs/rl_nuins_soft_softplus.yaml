@@ -1,0 +1,91 @@
+# ② 같은 보상 + 관점항(softplus/InfoNCE 형태). ①(rl_nuins_soft_plain)과 보상·데이터·
+# 예산이 동일하고 관점항만 다르다 -> 관점항 단독 기여를 귀속할 수 있다.
+#
+# 선형 -coef*(kl1-kl2) 대신 coef*softplus(kl2-kl1) 을 쓴다. k1 추정기에서 margin 은
+# 2지선다 로짓 차이라 softplus(-margin) 이 "올바른 분기를 고를 확률"의 교차엔트로피가
+# 되고, 기울기 -sigmoid(-margin) 이 1 이하로 유계이며 margin 이 커지면 사라진다.
+# 선형 형태는 NuInstruct 에서 k3 kl1 3.8e13, 방향성 낙폭 +4.64 nats 까지 폭주했다.
+#
+# 기존 보상은 이진 task 가 전체의 53%(8,022/15,046)고 그 포화도가 95~100% 라
+# 그룹 내 분산이 0 인 구간이 컸다 (학습 로그 실측 37.7%). nuins_task_soft 는
+# perception-closest / status 계열 / risk AP 를 부분 점수로 연속화한다.
+# 실측 포화도: 68.1% -> 58.3% (-9.8%p), perception-closest 는 100% -> 5.5%.
+#
+# 이 실행이 있어야 ② (같은 보상 + 관점항) 의 이득이 보상 덕인지 방법론 덕인지
+# 가릴 수 있다.
+#
+# L_view = -coef * (kl1 - kl2)
+#   kl1 = KL( p(y|6뷰 전부) || p(y|근거뷰 가림) )
+#   kl2 = KL( p(y|6뷰 전부) || p(y|대조뷰 가림) )
+#
+# DriveLM/DriveLMM-o1 과 다른 점:
+#   - 6뷰를 격자로 합치지 않고 개별 이미지로 넣는다 -> grid_input: false
+#     (VGGDrive 도 "six surround-view images from the current frame" 을 쓴다)
+#   - 근거뷰 라벨을 질문에서 파싱하지 않는다. NuInstruct 는 정답의 <class>[cN,...]
+#     에서 뽑아 evidence_views 컬럼에 미리 넣어뒀고, 트레이너가 그 컬럼을 우선한다.
+#   - 카메라 인덱스는 images 배열 순서(FL,F,FR,BL,B,BR)다. vgrl.CAMERAS 와 순서가
+#     다르지만 마스킹이 배열 인덱스로 동작하므로 정합한다 (c5 -> images[5]=BACK_RIGHT 확인).
+#
+# 근거뷰 라벨은 8,274행 중 25.0%. 라벨 없는 행은 관점항을 건너뛰고 plain GRPO 로
+# 학습된다(keep_unusable_rows: true). DriveLMM-o1 에서 라벨 있는 행만 쓰면 데이터
+# 구성이 바뀌어 지표가 떨어졌던 전례가 있다.
+model: /mnt/ssd4/mingyu/vgrl_saves/sft_nuins_q25vl7b_full
+train_file: /mnt/ssd4/mingyu/vgrl/data/nuins_rl_train.json
+output_dir: /mnt/ssd4/mingyu/vgrl_saves/rl_nuins_soft_softplus
+
+attn_implementation: sdpa
+keep_unusable_rows: true
+max_pixels: 401408                 # 뷰 하나당. SFT 와 동일
+
+rewards: [nuins_task_soft, nuins_format]
+reward_weights: [1.0, 0.5]
+
+view_grounding:
+  enabled: true
+  mode: kl_term
+  sign: maximize_margin
+  # k3 는 구조적으로 >= 0 이라 "분포가 흔들렸다"를 재고 "정답이 어려워졌다"를 못 잰다.
+  # 실측: 학습 전 모델이 k3 로는 kl1/kl2 0.839/0.255 (3.3배 선택성) 인데 k1 로는
+  # -0.030/-0.029 (선택성 없음). 진단이 k1 이므로 손실도 k1 이어야 같은 축이다.
+  estimator: k1
+  transform: softplus
+  # softplus 는 margin 0 근처에서 선형의 기울기 1/2 이라(실측 0.495) 압력을 맞추려면
+  # 선형 0.02 의 두 배가 필요하다. 유계이므로 선형 0.04 에서 PAPO 가 보고한 붕괴
+  # 위험은 해당되지 않는다.
+  coef: 0.04
+  grid_input: false                # 6뷰가 개별 이미지다
+  num_views: 6
+  num_views_to_mask: 1
+  mask_mode: black
+  # softplus 가 기울기 상한을 주므로 margin_clip 이 필요 없다.
+  margin_clip: null
+  kl_clip: null                    # 제거 (kl1 까지 눌러 근거뷰 신호를 깎는다)
+  detach_control_branch: false
+  warmup_steps: 50                 # plain GRPO 가 먼저 자리잡게
+  seed: 0
+
+deepspeed: configs/ds_zero3.json
+
+num_generations: 8
+per_device_train_batch_size: 4
+gradient_accumulation_steps: 2
+steps_per_generation: 2
+max_steps: 500
+learning_rate: 1.0e-6
+lr_scheduler_type: cosine
+warmup_ratio: 0.03
+beta: 0.02
+epsilon: 0.2
+loss_type: dr_grpo
+max_completion_length: 384         # NuInstruct 정답은 짧다 (bbox 목록/수치)
+temperature: 1.0
+top_p: 1.0
+bf16: true
+gradient_checkpointing: true
+ddp_timeout: 3600                  # KL 항이 forward 를 3배 한다
+logging_steps: 1
+save_strategy: steps
+save_steps: 100
+save_total_limit: 1
+dataloader_num_workers: 8
+report_to: []

@@ -1,0 +1,70 @@
+# View-grounded GRPO on DriveLM.
+# Stage 2 — assumes the SFT checkpoint from configs/sft_stage.yaml.
+
+model: /mnt/ssd1/vgrl/saves/sft            # output of the SFT stage
+train_file: /mnt/ssd1/vgrl/data/drivelm_rl.json
+eval_file: /mnt/ssd1/vgrl/data/drivelm_rl_val.json
+attn_implementation: sdpa          # flash-attn is not installed in vgrl:train
+                                   # (its wheel build is optional and failed)
+keep_unusable_rows: true                   # rows with no matched view split still
+                                           # train the policy, just without the term
+
+rewards: [text_overlap, object_reference, format]
+reward_weights: [1.0, 1.0, 0.2]
+
+# ---------------------------------------------------------------- our method
+view_grounding:
+  enabled: true
+  coef: 0.005               # weight on -(kl1 - kl2). Was 0.02, which let both KLs
+                            # run away: they rose together from ~0.03 to ~169 over
+                            # 250 steps, so the margin became noise (the KL-hacking
+                            # mode PAPO documents).
+  sign: maximize_margin     # maximize_margin | literal | kl1_only(=PAPO)
+  num_views: 6
+  num_views_to_mask: 1      # both branches blank the same count
+  mask_mode: black
+  answer_view_source: both
+  margin_clip: 10.0
+  kl_clip: 1.0              # the actual fix. margin_clip only bounded the
+                            # *difference*, so kl1 and kl2 were free to inflate in
+                            # lockstep; capping them individually removes the
+                            # degenerate direction.
+  detach_control_branch: false
+  warmup_steps: 50          # let plain GRPO settle first
+  seed: 0
+
+# ---------------------------------------------------------------- GRPOConfig
+output_dir: /mnt/ssd1/vgrl/saves/rl_viewground
+# Measured 100 s/step at num_generations=8 (GRPO rollouts + the term's three
+# forward branches). 8 rollouts x 1500 steps would be 41 h per variant, so the
+# group size is halved — advantage estimates get noisier but the run fits.
+num_generations: 4
+# Batch sizing counts *completions*, so keep it a multiple of num_generations.
+# The SFT run left 100 GB/GPU unused at per_device=1 and ran at 13.8 s/step; the
+# GPU sat at ~60% with dips to 0% waiting on the dataloader. Raising the batch and
+# the worker count is where the throughput is.
+per_device_train_batch_size: 8
+gradient_accumulation_steps: 2
+steps_per_generation: 2
+dataloader_num_workers: 16
+dataloader_persistent_workers: true
+# Step budget follows the field: MindDriver's RFT is 1200 steps at batch 16,
+# AutoDrive-R2 is 750 iterations. 250 x 8 prompts = 2000 prompts is smaller than
+# both but enough to see whether vg/margin trends up.
+max_steps: 250
+learning_rate: 1.0e-6
+lr_scheduler_type: cosine
+warmup_ratio: 0.03
+beta: 0.0                   # no reference-KL; the perception term is the regulariser
+epsilon: 0.2
+loss_type: dr_grpo
+max_completion_length: 256
+temperature: 1.0
+top_p: 1.0
+bf16: true
+gradient_checkpointing: true       # kept on despite the headroom: the view
+                                   # term holds three activation sets, not one
+logging_steps: 1
+save_steps: 200
+report_to: []
+max_pixels: 401408          # 6 views/sample: keep the visual token budget in check

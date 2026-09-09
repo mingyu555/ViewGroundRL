@@ -1,0 +1,76 @@
+# DriveLMM-o1 GRPO + KL 관점항 (kl_clip 없음), 전체 파인튜닝.
+#
+# L_view = -coef * (kl1 - kl2)
+#   kl1 = KL( p(y|격자 6셀) || p(y|근거뷰 셀 가림) )
+#   kl2 = KL( p(y|격자 6셀) || p(y|대조뷰 셀 가림) )
+#
+# 롤아웃 혼합(대조뷰 불변성)은 drop_ctrl 을 0 으로 미는 목표였는데, 이 모델은
+# 이미 drop_ctrl 이 음수(-0.0276)라 0 으로 미는 것이 gap 악화였다
+# (실측: gap +0.0905 -> +0.0754). KL 항은 kl2 를 줄이는 방향이라 음수 쪽으로도
+# 밀 수 있어 목표 부호 문제가 없다.
+#
+# kl_clip 제거 근거 (3B 누수 split 격자, n=1038, 5회):
+#   noclip - vg :  F1 +0.0088 (1.52 sigma),  gap -0.0079 (0.80 sigma)
+#   즉 성능은 유의하게 오르고 gap 손실은 노이즈 수준. clip 이 kl1 까지 눌러
+#   근거뷰 신호를 깎고 있었다.
+model: /mnt/ssd1/vgrl/saves/sft_dlmm_7b_full
+train_file: /mnt/ssd1/vgrl/data/dlmm_sft_train.json
+eval_file: /mnt/ssd1/vgrl/data/dlmm_sft_val.json
+output_dir: /mnt/ssd4/mingyu/vgrl_saves/rl_dlmm_7b_full_kl_all
+
+attn_implementation: sdpa
+# plain GRPO 대조군과 데이터를 맞춘다. 6,073행(객관식 25%)으로 돌렸을 때 MCQ 가
+# 64.03% 로 대조군 67.13%(16,321행, 객관식 51%) 보다 낮았는데, 객관식 노출이 절반이라
+# 데이터 탓일 가능성이 크다. 라벨 없는 행(62.8%)은 관점항이 건너뛰고 plain GRPO 로
+# 학습된다 (pick_mask_views 가 ok=False 를 돌려주고 valid 마스크로 걸러진다).
+keep_unusable_rows: true
+max_pixels: 2408448
+
+rewards: [dlmm_mcq, dlmm_text, dlmm_format]
+reward_weights: [1.0, 1.0, 0.5]
+
+view_grounding:
+  enabled: true
+  mode: kl_term
+  sign: maximize_margin            # L = -coef*(kl1-kl2)
+  coef: 0.02
+  grid_input: true                 # 6뷰가 격자 1장으로 합쳐져 있다
+  grid_cells: 6
+  grid_cols: 3
+  num_views: 6
+  num_views_to_mask: 1
+  mask_mode: black
+  answer_view_source: question     # <oN,CAMERA,x,y> 태그가 질문에 있다
+  margin_clip: 10.0
+  kl_clip: null                    # 제거. 0 으로 두면 kl 을 0 으로 클립해버린다
+  detach_control_branch: false
+  warmup_steps: 50                 # plain GRPO 가 먼저 자리잡게
+  seed: 0
+
+deepspeed: configs/ds_zero3.json
+
+num_generations: 8
+per_device_train_batch_size: 8
+gradient_accumulation_steps: 2
+steps_per_generation: 2
+max_steps: 500
+learning_rate: 1.0e-6
+lr_scheduler_type: cosine
+warmup_ratio: 0.03
+beta: 0.02
+epsilon: 0.2
+loss_type: dr_grpo
+max_completion_length: 768
+temperature: 1.0
+top_p: 1.0
+bf16: true
+gradient_checkpointing: true
+# KL 항이 forward 를 3배 해서 스텝이 210~280초다 (plain GRPO 79초). NCCL 기본
+# 워치독 한계를 스텝 하나가 넘겨 191/500 에서 collective timeout 으로 죽었다.
+ddp_timeout: 3600
+logging_steps: 1
+save_strategy: steps
+save_steps: 100
+save_total_limit: 1
+dataloader_num_workers: 8
+report_to: []

@@ -1,0 +1,52 @@
+# DriveLMM-o1 로 plain GRPO. OmniDrive-R1 의 Stage 2 (표준 GRPO)에 대응한다.
+# Stage 1(DeepEyes + Clip-GRPO)은 그들의 기여이므로 건너뛴다 - 우리 롤아웃 혼합이
+# 같은 문제(시각 근거)에 대한 다른 답이라 둘을 섞으면 기여가 뒤엉킨다.
+model: /mnt/ssd1/vgrl/saves/sft_dlmm_7b_merged
+train_file: /mnt/ssd1/vgrl/data/dlmm_sft_train.json
+eval_file: /mnt/ssd1/vgrl/data/dlmm_sft_val.json
+output_dir: /mnt/ssd1/vgrl/saves/rl_dlmm_7b_lr1e5
+
+attn_implementation: sdpa
+keep_unusable_rows: true           # plain GRPO 는 근거뷰 라벨이 필요 없다
+max_pixels: 2408448                # SFT/평가와 동일 (격자 2400x900)
+
+# 정답 형식이 '**Final Answer**: X' 라 <think>/<answer> 기반 보상은 쓰지 않는다.
+# dlmm_mcq 는 객관식(51%)에서, dlmm_text 는 서술형에서 신호를 준다.
+rewards: [dlmm_mcq, dlmm_text, dlmm_format]
+# 1차 실행에서 format 가중치 0.2 가 너무 약해 길이 폭주를 못 막았다 (출력 574->1130자,
+# 20.9% 가 잘려 MCQ 63.95->51.90%). format 을 0.5 로 올리고 잘림에 -1.0 벌점을 준다.
+reward_weights: [1.0, 1.0, 0.5]
+
+view_grounding:
+  enabled: false                   # 기준선: 순수 GRPO
+
+lora:
+  r: 64
+  alpha: 16
+  dropout: 0.05
+  target_modules: [q_proj, k_proj, v_proj, o_proj]
+
+num_generations: 8                 # OmniDrive-R1 도 문항당 8 롤아웃
+per_device_train_batch_size: 8     # num_generations 의 배수여야 한다
+gradient_accumulation_steps: 2
+steps_per_generation: 2
+# 1차·2차는 lr 1e-6 (3B 전체 FT 설정에서 물려받음) 이라 정책이 거의 안 움직였다:
+# grad_norm 이 250스텝 내내 0.0022 고정 (SFT LoRA 때는 0.15~0.33). LoRA 는 전체 FT 보다
+# 큰 학습률이 필요하다 — SFT 는 1e-4 를 썼다. 10배 올리고 스텝도 2배로 늘린다.
+max_steps: 500
+learning_rate: 1.0e-5
+lr_scheduler_type: cosine
+warmup_ratio: 0.03
+beta: 0.02
+epsilon: 0.2
+loss_type: dr_grpo
+max_completion_length: 768         # 여유. 실효 통제는 dlmm_format 의 300 토큰 상한
+temperature: 1.0
+top_p: 1.0
+bf16: true
+gradient_checkpointing: true
+logging_steps: 1
+save_steps: 250
+save_total_limit: 1
+dataloader_num_workers: 8
+report_to: []

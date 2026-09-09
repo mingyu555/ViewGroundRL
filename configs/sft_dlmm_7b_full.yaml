@@ -1,0 +1,43 @@
+# DriveLMM-o1 로 Qwen2.5-VL-7B 전체 파인튜닝 (LoRA 대조군).
+#
+# LoRA 판(configs/sft_dlmm_7b.yaml)과 데이터·프롬프트·배치·epoch 를 모두 동일하게 두고
+# 학습 방식만 바꾼다. 목적: 3B 에서 관찰한 "RL 이 grounding 을 훼손한다"가
+# LoRA 때문에 안 나타난 것인지 확인하는 것 (LoRA 는 베이스가 고정이라 훼손 여지가 적다).
+model: /mnt/ssd2/mingyu/qwen7b
+train_file: /mnt/ssd1/vgrl/data/dlmm_sft_train.json
+eval_file: /mnt/ssd1/vgrl/data/dlmm_sft_val.json
+output_dir: /mnt/ssd1/vgrl/saves/sft_dlmm_7b_full
+
+attn_implementation: sdpa
+freeze_vision_tower: true          # LoRA 판과 동일. merger 는 학습
+max_pixels: 2408448                # 평가와 동일 (격자 2400x900)
+
+deepspeed: configs/ds_zero3.json   # 없으면 GPU 당 85GB 필요
+
+max_length: 8192
+completion_only_loss: true
+loss_type: nll
+per_device_train_batch_size: 1
+gradient_accumulation_steps: 8     # 4 GPU x 8 = 전역 배치 32 (LoRA 판과 동일)
+num_train_epochs: 2
+learning_rate: 1.0e-5              # 전체 FT 는 LoRA(1e-4)보다 낮게
+lr_scheduler_type: cosine
+warmup_steps: 50
+max_grad_norm: 1.0
+weight_decay: 0.0
+bf16: true
+gradient_checkpointing: true
+gradient_checkpointing_kwargs:
+  use_reentrant: false
+logging_steps: 10
+# 중간 체크포인트를 아예 만들지 않는다. save_only_model 로 옵티마이저는 빠지지만
+# checkpoint-N/model.safetensors 와 최종 model.safetensors 가 각각 16GB 로 중복돼
+# 31GB 가 됐다 (실측). save_strategy=no 면 trainer.save_model 로 한 번만 저장된다.
+save_strategy: "no"
+save_only_model: true
+eval_strategy: steps
+eval_steps: 400
+per_device_eval_batch_size: 1
+dataloader_num_workers: 8
+report_to: []
+seed: 0

@@ -1,0 +1,39 @@
+# DriveLM 4카테고리 SFT — VGGDrive stage 1 방식 (VLM 동결, CVGE 만 학습).
+# 논문 4.1: VGGT 동결, base VLM 동결, CVGE 만 2 epoch / lr 1e-4.
+model: /mnt/ssd4/mingyu/vgrl/base_qwen3vl8b
+vggt_weights: /mnt/ssd4/mingyu/vggdrive/vggt/model.pt
+
+train_file: /mnt/ssd4/mingyu/vgrl/data/dlm_sft4_train.json
+eval_file: /mnt/ssd4/mingyu/vgrl/data/dlm_sft4_train_val.json
+max_eval_rows: 200
+
+attn_implementation: sdpa
+max_pixels: 401408          # 뷰 하나당. 6뷰 = 평가와 동일한 예산
+max_length: 4096
+
+cvge:
+  in_dim: 2048              # VGGT aggregator 출력
+  scale: 4
+  num_heads: 8
+  dropout: 0.1
+
+output_dir: /mnt/ssd4/mingyu/vgrl_saves/sft_dlm4_q3vl8b_cvge
+num_train_epochs: 2
+learning_rate: 1.0e-4
+per_device_train_batch_size: 2
+gradient_accumulation_steps: 2
+lr_scheduler_type: cosine
+warmup_ratio: 0.03
+weight_decay: 0.0
+max_grad_norm: 1.0
+bf16: true
+gradient_checkpointing: false
+logging_steps: 10
+eval_strategy: "no"
+save_strategy: "no"         # cvge.pt 만 저장한다. 체크포인트는 얼린 8B 를 통째로
+                            # 복제해 18G 씩 먹는데 재개용 말고는 쓸 데가 없다.
+report_to: []
+dataloader_num_workers: 4
+remove_unused_columns: false
+ddp_find_unused_parameters: false
+debug_nan: true

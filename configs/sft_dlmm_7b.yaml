@@ -1,0 +1,52 @@
+# DriveLMM-o1 로 Qwen2.5-VL-7B SFT. OmniDrive-R1 의 콜드스타트 단계에 대응한다.
+#
+# 입력은 2x3 격자 합성 이미지 1장이다 (공식 prepare_data_internvl.py 와 동일).
+# 정답이 "top middle image" 처럼 격자 위치를 가리키므로 6장을 따로 주면 어긋난다.
+# max_pixels 는 평가(tools/dlmm_infer.py)와 반드시 같아야 한다 — 학습/평가 해상도가
+# 갈리면 형식 준수율이 달라져 MCQ 가 흔들린다.
+model: /mnt/ssd2/mingyu/qwen7b
+train_file: /mnt/ssd1/vgrl/data/dlmm_sft_train.json
+eval_file: /mnt/ssd1/vgrl/data/dlmm_sft_val.json
+output_dir: /mnt/ssd1/vgrl/saves/sft_dlmm_7b
+
+attn_implementation: sdpa
+freeze_vision_tower: true          # merger 는 학습 대상으로 남긴다
+max_pixels: 2408448                # 격자 2400x900 = 2.16M px 를 줄이지 않는다
+
+# 7B 전체 FT 는 ~106GB 라 공유 GPU 에서 불가. LoRA 로 간다 (OmniDrive 도 LoRA 사용).
+lora:
+  r: 64
+  alpha: 16
+  dropout: 0.05
+  target_modules: [q_proj, k_proj, v_proj, o_proj]
+
+max_length: 8192
+completion_only_loss: true
+# TRL 1.9.2 의 기본 loss_type='chunked_nll' 은 PEFT 래핑과 충돌한다
+# (_patch_chunked_ce_lm_head 가 functools.partial 에서 __func__ 를 찾다 죽는다).
+loss_type: nll
+per_device_train_batch_size: 1
+# 3B 실험과 동일하게 전역 배치 32: per_device 1 x grad_accum 8 x 4 GPU.
+# 단 accelerate launch 로 띄워야 한다 - 그냥 python 으로 돌리면 DataParallel 이 되고
+# per_device_batch=1 은 GPU 한 장에만 가서 나머지 3장이 놀고 스텝이 4배가 된다.
+gradient_accumulation_steps: 8
+num_train_epochs: 2
+learning_rate: 1.0e-4              # LoRA 는 전체 FT(1e-5)보다 높게
+lr_scheduler_type: cosine
+warmup_steps: 50
+max_grad_norm: 1.0
+weight_decay: 0.0
+bf16: true
+gradient_checkpointing: true
+gradient_checkpointing_kwargs:
+  use_reentrant: false
+logging_steps: 10
+save_strategy: steps
+save_steps: 500
+save_total_limit: 1
+eval_strategy: steps
+eval_steps: 400
+per_device_eval_batch_size: 1
+dataloader_num_workers: 8
+report_to: []
+seed: 0

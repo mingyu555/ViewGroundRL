@@ -1,0 +1,43 @@
+# DriveLMM-o1 plain GRPO, 전체 파인튜닝 (LoRA 판의 대조군).
+#
+# 목적: 3B DriveLM 에서 관찰한 "RL 이 drop_ctrl 을 올려 gap 을 깎는다"가
+# LoRA 에서는 나타나지 않았는데, 전체 FT 에서는 재현되는지 확인한다.
+# 그게 내 롤아웃 혼합 방법론의 근거이므로 재현 여부가 방법론의 생사를 정한다.
+model: /mnt/ssd1/vgrl/saves/sft_dlmm_7b_full
+train_file: /mnt/ssd1/vgrl/data/dlmm_sft_train.json
+eval_file: /mnt/ssd1/vgrl/data/dlmm_sft_val.json
+output_dir: /mnt/ssd1/vgrl/saves/rl_dlmm_7b_full
+
+attn_implementation: sdpa
+keep_unusable_rows: true
+max_pixels: 2408448
+
+rewards: [dlmm_mcq, dlmm_text, dlmm_format]
+reward_weights: [1.0, 1.0, 0.5]
+
+view_grounding:
+  enabled: false                   # 기준선: 순수 GRPO
+
+deepspeed: configs/ds_zero3.json   # 정책만 샤딩. 참조 모델은 별도 15GB
+
+num_generations: 8
+per_device_train_batch_size: 8
+gradient_accumulation_steps: 2
+steps_per_generation: 2
+max_steps: 500                     # LoRA lr1e-5 판과 동일
+learning_rate: 1.0e-6              # 전체 FT 는 LoRA(1e-5)보다 낮게
+lr_scheduler_type: cosine
+warmup_ratio: 0.03
+beta: 0.02
+epsilon: 0.2
+loss_type: dr_grpo
+max_completion_length: 768
+temperature: 1.0
+top_p: 1.0
+bf16: true
+gradient_checkpointing: true
+logging_steps: 1
+save_strategy: "no"                # 이미 완주해 모델이 남아 있다
+save_only_model: true
+dataloader_num_workers: 8
+report_to: []

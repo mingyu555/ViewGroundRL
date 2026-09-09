@@ -1,0 +1,29 @@
+# DriveLM 4카테고리 SFT — VGGT 없이 전체 파인튜닝. CVGE 쪽 대조군.
+model: /mnt/ssd4/mingyu/vgrl/base_qwen3vl8b
+train_file: /mnt/ssd4/mingyu/vgrl/data/dlm_sft4_train.json
+eval_file: /mnt/ssd4/mingyu/vgrl/data/dlm_sft4_train_val.json
+max_eval_rows: 200
+
+attn_implementation: sdpa
+max_pixels: 401408
+freeze_vision_tower: true   # CVGE 쪽도 비전 타워는 얼려 있다 (논문 설정)
+
+output_dir: /mnt/ssd4/mingyu/vgrl_saves/sft_dlm4_q3vl8b_full
+num_train_epochs: 2
+learning_rate: 1.0e-5       # 전체 FT 는 CVGE 의 1e-4 보다 훨씬 낮아야 한다
+per_device_train_batch_size: 1
+gradient_accumulation_steps: 4
+lr_scheduler_type: cosine
+warmup_ratio: 0.03
+weight_decay: 0.0
+max_grad_norm: 1.0
+bf16: true
+gradient_checkpointing: true
+max_length: 4096
+logging_steps: 10
+eval_strategy: "no"
+save_strategy: "no"
+report_to: []
+dataloader_num_workers: 4
+deepspeed: configs/ds_zero3.json
+loss_type: nll

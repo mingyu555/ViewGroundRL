@@ -1,0 +1,57 @@
+# DriveLMM-o1 GRPO + 롤아웃 혼합 (내 방법론), 전체 파인튜닝.
+#
+# 대조군 configs/rl_dlmm_7b_full.yaml 와 데이터·보상·배치·스텝·학습률을 모두
+# 동일하게 두고, num_generations 8 중 2 개만 '대조뷰 셀을 가린' 입력에서 뽑는다.
+# 추가 생성이 없으므로 비용도 같다.
+#
+# 겨냥하는 것: RL 이 drop_ctrl 을 올려 gap 을 깎는 현상
+#   3B DriveLM 풀FT     drop_ctrl +0.0054 -> +0.0150 (+0.0096), gap -0.0081
+#   7B DriveLMM-o1 풀FT drop_ctrl -0.0276 -> -0.0176 (+0.0100), gap -0.0051
+model: /mnt/ssd1/vgrl/saves/sft_dlmm_7b_full
+train_file: /mnt/ssd1/vgrl/data/dlmm_sft_train.json
+eval_file: /mnt/ssd1/vgrl/data/dlmm_sft_val.json
+output_dir: /mnt/ssd4/mingyu/vgrl_saves/rl_dlmm_7b_full_vg
+
+attn_implementation: sdpa
+keep_unusable_rows: false          # 근거뷰 라벨이 있는 행만 (6,073). 대조뷰를 골라야 한다
+max_pixels: 2408448
+
+rewards: [dlmm_mcq, dlmm_text, dlmm_format]
+reward_weights: [1.0, 1.0, 0.5]
+
+view_grounding:
+  enabled: true
+  mode: rollout_mask
+  masked_rollouts: 2               # 8 중 2 (6/2). 5/3 은 민감도 후보
+  normalize_per_condition: true
+  grid_cells: 6
+  grid_cols: 3
+  answer_view_source: question     # <oN,CAMERA,x,y> 태그가 질문에 있다
+  warmup_steps: 0                  # 손실항이 없으므로 워밍업 불필요
+
+deepspeed: configs/ds_zero3.json
+
+num_generations: 8
+per_device_train_batch_size: 8
+gradient_accumulation_steps: 2
+steps_per_generation: 2
+max_steps: 500
+learning_rate: 1.0e-6
+lr_scheduler_type: cosine
+warmup_ratio: 0.03
+beta: 0.02
+epsilon: 0.2
+loss_type: dr_grpo
+max_completion_length: 768
+temperature: 1.0
+top_p: 1.0
+bf16: true
+gradient_checkpointing: true
+logging_steps: 1
+# 240/500 에서 외부 종료로 5.4시간을 통째로 잃었다 (save_strategy="no" 였음).
+# ssd4 에 3TB 가 있으므로 옵티마이저까지 포함한 완전 체크포인트를 100스텝마다 남긴다.
+save_strategy: steps
+save_steps: 100
+save_total_limit: 1
+dataloader_num_workers: 8
+report_to: []

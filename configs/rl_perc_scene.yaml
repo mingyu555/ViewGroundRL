@@ -1,0 +1,87 @@
+# View-grounded GRPO on DriveLM *perception only*, on a leak-free scene split.
+#
+# 이전 라운드와 두 가지가 다르다:
+#  * 출발점이 sft_dlm2ep (DriveLM 전용, 씬 split, 누수 0). 이전에 쓴 sft_v2 는
+#    평가셋 프레임의 98.7% 를 학습에서 봤고, 그 누수가 perception F1 을 0.2551 ->
+#    0.4008 (+57%), Accuracy 를 33.0 -> 58.9 (+78%) 로 부풀렸다.
+#  * RL train/val 도 씬 단위로 분리. 이전 val 은 train 과 프레임이 100% 겹쳤다.
+#
+# Why perception only: measured per-category blank-view sensitivity on the SFT model
+# (n=179/417/204) shows the signal lives entirely in one category —
+#     perception  drop_evidence +0.0838   (F1 0.409, i.e. a 20% relative drop)
+#     prediction  drop_evidence -0.0110
+#     planning    drop_evidence +0.0089
+# Training on all three pooled prediction (50% of rows) and planning (28%) into the
+# batch, where blanking the evidence view changes nothing, so the perception term
+# was averaged against two categories that carry no signal. The pooled
+# drop_evidence of ~+0.015 was that dilution, not a property of the method.
+
+model: /mnt/ssd1/vgrl/saves/sft_dlm2ep            # output of the SFT stage
+train_file: /mnt/ssd1/vgrl/data/perc_scene_train.json
+eval_file: /mnt/ssd1/vgrl/data/perc_scene_val.json
+attn_implementation: sdpa          # flash-attn is not installed in vgrl:train
+                                   # (its wheel build is optional and failed)
+keep_unusable_rows: true                   # rows with no matched view split still
+                                           # train the policy, just without the term
+
+rewards: [text_overlap, object_reference, format]
+reward_weights: [1.0, 1.0, 0.2]
+
+# ---------------------------------------------------------------- our method
+view_grounding:
+  enabled: true
+  coef: 0.02                # PAPO-GRPO-3B 의 gamma 와 같은 값 (arXiv:2507.06448).
+                            # 0.005 로 낮춰 돌렸을 때 이 항이 전체 손실의 1.63% 뿐이었고
+                            # kl_clip 실측 최대가 상한의 1/10 이어서 폭주 위험이 없었다.
+                            # 예전 폭주(0.03 -> 169)는 kl_clip 이 없던 조건이었다.
+  sign: maximize_margin     # maximize_margin | literal | kl1_only(=PAPO)
+  num_views: 6
+  num_views_to_mask: 1      # both branches blank the same count
+  mask_mode: black
+  answer_view_source: both
+  margin_clip: 10.0
+  kl_clip: 1.0              # the actual fix. margin_clip only bounded the
+                            # *difference*, so kl1 and kl2 were free to inflate in
+                            # lockstep; capping them individually removes the
+                            # degenerate direction.
+  detach_control_branch: false
+  warmup_steps: 50          # let plain GRPO settle first
+  seed: 0
+
+# ---------------------------------------------------------------- GRPOConfig
+output_dir: /mnt/ssd1/vgrl/saves/rl_perc_vg
+# Measured 100 s/step at num_generations=8 (GRPO rollouts + the term's three
+# forward branches). 8 rollouts x 1500 steps would be 41 h per variant, so the
+# group size is halved — advantage estimates get noisier but the run fits.
+num_generations: 6      # PAPO-GRPO 와 동일
+# Batch sizing counts *completions*, so keep it a multiple of num_generations.
+# The SFT run left 100 GB/GPU unused at per_device=1 and ran at 13.8 s/step; the
+# GPU sat at ~60% with dips to 0% waiting on the dataloader. Raising the batch and
+# the worker count is where the throughput is.
+per_device_train_batch_size: 6   # num_generations(6) 의 배수여야 한다
+gradient_accumulation_steps: 2
+steps_per_generation: 2
+dataloader_num_workers: 16
+dataloader_persistent_workers: true
+# Step budget follows the field: MindDriver's RFT is 1200 steps at batch 16,
+# AutoDrive-R2 is 750 iterations. 250 x 8 prompts = 2000 prompts is smaller than
+# both but enough to see whether vg/margin trends up.
+max_steps: 250              # perception 50,973행 중 소비량은 여전히 일부다
+learning_rate: 1.0e-6
+lr_scheduler_type: cosine
+warmup_ratio: 0.03
+beta: 0.02                  # 참조 KL 복원. off 변형은 관점항을 끄므로 beta 0 에서는
+                            # 앵커가 아예 없었고, 그 실행이 성능을 가장 많이 잃었다.
+epsilon: 0.2
+loss_type: dr_grpo
+max_completion_length: 256
+temperature: 1.0
+top_p: 1.0
+bf16: true
+gradient_checkpointing: true       # kept on despite the headroom: the view
+                                   # term holds three activation sets, not one
+logging_steps: 1
+save_steps: 300
+save_total_limit: 1              # 250스텝 학습이라 중간 저장 1회, 1개만 유지
+report_to: []
+max_pixels: 401408          # 6 views/sample: keep the visual token budget in check

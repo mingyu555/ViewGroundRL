@@ -1,0 +1,62 @@
+# Stage 1 — DriveLM-only SFT on a scene-level split.
+#
+# Two changes from the earlier sft_v2 run:
+#  * nuScenes trajectory rows dropped. sft_v2 was 74% DriveLM / 26% nuScenes, but
+#    every RL stage since has trained on DriveLM alone, so the two stages saw
+#    different distributions and the trajectory ability drifted uncontrolled.
+#  * split is by *scene*, not by QA row. The previous val leaked completely —
+#    measured: perception val 918 frames were 100% present in train, and 199 of
+#    1,038 val questions appeared verbatim in train, because drivelm_prepare.py
+#    shuffled rows and a frame carries ~12 QA pairs. Frame-level would still leak
+#    (key frames within a scene are seconds apart), so scenes are the unit.
+#    592 train scenes / 104 val scenes, frame overlap 0.
+#
+# Stage 1 — plain SFT on the teacher-distilled CoT set, via TRL SFTTrainer.
+#   accelerate launch --num_processes 4 train_sft.py --config configs/sft_trl.yaml
+#
+# No view-grounding term here by design (docs/METHOD.md): the model first has to
+# learn the <think>/<answer> structure, or the RL stage's kl1 measures format noise
+# instead of perception. The base model's zero-shot numbers make that concrete —
+# it emitted zero parseable trajectories on the verbatim prompt.
+
+model: /mnt/ssd1/vgrl/base_qwen25vl3b
+train_file: /mnt/ssd1/vgrl/data/dlm_sft_train.json
+eval_file: /mnt/ssd1/vgrl/data/dlm_sft_val.json
+attn_implementation: sdpa          # flash-attn wheel is optional in this image
+freeze_vision_tower: true          # merger stays trainable
+
+output_dir: /mnt/ssd1/vgrl/saves/sft_dlm
+max_length: 8192
+completion_only_loss: true         # 6 view placeholders + a long fixed instruction
+                                   # block would otherwise drown the CoT signal
+
+per_device_train_batch_size: 1
+gradient_accumulation_steps: 8     # global batch 32 over 4 GPUs
+num_train_epochs: 2
+learning_rate: 1.0e-5
+lr_scheduler_type: cosine
+warmup_steps: 50   # warmup_ratio is deprecated in transformers 5.x
+max_grad_norm: 1.0
+weight_decay: 0.0
+bf16: true
+gradient_checkpointing: true
+gradient_checkpointing_kwargs:
+  use_reentrant: false
+
+logging_steps: 10
+save_strategy: steps
+save_steps: 600
+# 풀 파인튜닝 체크포인트가 하나에 19GB(모델 7 + optimizer 12.5)다. save_steps 500 +
+# save_total_limit 2 로 돌렸을 때 866~1343 스텝 구간에서 두 개가 쌓여 디스크가 두 번
+# 찼다. 600 으로 올리고 1개만 남기면 재개 지점은 확보하면서 peak 이 26GB 로 준다.
+save_total_limit: 1
+eval_strategy: steps
+eval_steps: 500
+per_device_eval_batch_size: 1
+dataloader_num_workers: 8
+report_to: []
+seed: 0
+
+# 6 views per sample: keep the visual-token budget bounded or the sequence blows
+# past max_length. 401408 px -> ~512 visual tokens per view.
+max_pixels: 401408

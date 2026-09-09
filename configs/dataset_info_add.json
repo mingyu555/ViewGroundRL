@@ -1,0 +1,30 @@
+{
+  "cot_sft": {
+    "file_name": "/mnt/ssd1/vgrl/data/cot_sft.json",
+    "formatting": "sharegpt",
+    "system": "system",
+    "columns": {"messages": "conversations", "images": "images"},
+    "tags": {"role_tag": "from", "content_tag": "value", "user_tag": "human", "assistant_tag": "gpt"}
+  },
+  "cot_sft_val": {
+    "file_name": "/mnt/ssd1/vgrl/data/cot_sft_val.json",
+    "formatting": "sharegpt",
+    "system": "system",
+    "columns": {"messages": "conversations", "images": "images"},
+    "tags": {"role_tag": "from", "content_tag": "value", "user_tag": "human", "assistant_tag": "gpt"}
+  },
+  "drivelm_sft_plain": {
+    "file_name": "/mnt/ssd1/vgrl/data/drivelm_sft.json",
+    "formatting": "sharegpt",
+    "system": "system",
+    "columns": {"messages": "conversations", "images": "images"},
+    "tags": {"role_tag": "from", "content_tag": "value", "user_tag": "human", "assistant_tag": "gpt"}
+  },
+  "nuscenes_sft_plain": {
+    "file_name": "/mnt/ssd1/vgrl/data/nuscenes_plan_sft.json",
+    "formatting": "sharegpt",
+    "system": "system",
+    "columns": {"messages": "conversations", "images": "images"},
+    "tags": {"role_tag": "from", "content_tag": "value", "user_tag": "human", "assistant_tag": "gpt"}
+  }
+}

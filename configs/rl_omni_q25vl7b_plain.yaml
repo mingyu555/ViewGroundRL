@@ -1,0 +1,60 @@
+# OmniDrive · 일반 GRPO (관점항 없음), SFT 없이 학습 전 모델에서 바로.
+#
+# 왜 SFT 를 건너뛰나: OmniDrive 정답은 자유 서술이라 보상이 처음부터 연속이다.
+# NuInstruct 는 이진 과제가 53% 라 학습 전 모델의 보상이 전부 0 이어서 그룹 내
+# 분산이 없었지만(실측 frac_reward_zero_std 0.377), OmniDrive 보상은 검증에서
+# 4후보 그룹 표준편차 중앙값 0.363, 분산 0 인 그룹 0/100 이었다.
+#
+# 이 실행의 목적: 학습 전 근거뷰 낙폭이 -0.00095 (사실상 0) 인 상태에서
+# 일반 GRPO 만으로 관점 접지가 생기는지를 본다. 생기지 않으면 문제 정의
+# ("일반 GRPO 로는 정확한 뷰를 보지 않는다") 가 OmniDrive 에서 성립하고,
+# 관점항의 대조군이 된다.
+#
+# 보상 (vgrl/rewards.py):
+#   omni_task   = 0.50 언어 F1 + 0.25 안전성 키워드 F1 + 0.35 좌표 F1
+#                 (있는 항만 재정규화. 좌표 항이 없으면 관점 접지가 보상에 안 실린다)
+#   omni_format = 길이비 + 3-gram 다양성 (한 단어 붕괴 / 무한 반복 방지)
+model: /mnt/ssd4/mingyu/vgrl/base_qwen25vl7b
+train_file: /mnt/ssd4/mingyu/vgrl/data/omni_rl_train.json
+output_dir: /mnt/ssd4/mingyu/vgrl_saves/rl_omni_q25vl7b_plain
+
+attn_implementation: sdpa
+keep_unusable_rows: true
+max_pixels: 401408                 # 뷰 하나당
+
+rewards: [omni_task, omni_format]
+reward_weights: [1.0, 0.3]
+
+view_grounding:
+  enabled: false                   # 일반 GRPO
+  grid_input: false                # 6뷰 개별 이미지
+  num_views: 6
+
+deepspeed: configs/ds_zero3.json
+
+# GPU 4장. 생성 배치 = per_device 4 x 4 GPU x steps_per_generation 2 = 32 = 8개씩 4그룹
+# (NuInstruct RL 실행과 같은 구성). GPU 2장으로는 옵티마이저 몫이 42GB 로 올라
+# GPU 0 여유 89GB 에서 OOM 났고, CPU 오프로드는 pin_memory() 가 죽었다.
+num_generations: 8
+per_device_train_batch_size: 4
+gradient_accumulation_steps: 2
+steps_per_generation: 2
+max_steps: 400
+learning_rate: 1.0e-6
+lr_scheduler_type: cosine
+warmup_ratio: 0.03
+beta: 0.02
+epsilon: 0.2
+loss_type: dr_grpo
+max_completion_length: 256         # 정답 중앙값 66단어
+temperature: 1.0
+top_p: 1.0
+bf16: true
+gradient_checkpointing: true
+ddp_timeout: 3600
+logging_steps: 1
+save_strategy: steps
+save_steps: 100
+save_total_limit: 1
+dataloader_num_workers: 8
+report_to: []

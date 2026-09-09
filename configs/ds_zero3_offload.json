@@ -1,0 +1,19 @@
+{
+  "_comment": "expandable_segments:True 와 같이 쓰면 pin_memory() 가 cudaErrorInvalidValue 로 죽는다 — 둘 중 하나만. GPU 2장짜리 ZeRO-3. 4장에 쪼개면 21GB 였지만 2장이면 옵티마이저 몫이 42GB 로 올라 공유 GPU 에 안 들어간다 (실측: GPU 0 에서 86.3GB 쓰고 OOM). 옵티마이저 상태를 CPU 로 내린다 — grad_accum 8 이라 옵티마이저 스텝이 8 마이크로스텝마다 한 번이고, 스텝 시간이 6뷰 순전파에 지배되므로 손해가 작다.",
+  "bf16": { "enabled": true },
+  "zero_optimization": {
+    "stage": 3,
+    "offload_optimizer": { "device": "cpu", "pin_memory": true },
+    "overlap_comm": true,
+    "contiguous_gradients": true,
+    "reduce_bucket_size": 16777216,
+    "stage3_prefetch_bucket_size": 16777216,
+    "stage3_param_persistence_threshold": 65536,
+    "stage3_gather_16bit_weights_on_model_save": true
+  },
+  "gradient_clipping": "auto",
+  "train_batch_size": "auto",
+  "train_micro_batch_size_per_gpu": "auto",
+  "gradient_accumulation_steps": "auto",
+  "steps_per_print": 1000000
+}

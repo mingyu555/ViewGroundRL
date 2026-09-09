@@ -1,0 +1,18 @@
+{
+  "_comment": "7B 풀 파인튜닝용 ZeRO-3. DDP 는 GPU 당 85GB 가 필요해 공유 GPU 에서 불가능하지만, 파라미터·경사·옵티마이저를 4장에 쪼개면 21GB 로 내려간다.",
+  "bf16": { "enabled": true },
+  "zero_optimization": {
+    "stage": 3,
+    "overlap_comm": true,
+    "contiguous_gradients": true,
+    "reduce_bucket_size": 16777216,
+    "stage3_prefetch_bucket_size": 16777216,
+    "stage3_param_persistence_threshold": 65536,
+    "stage3_gather_16bit_weights_on_model_save": true
+  },
+  "gradient_clipping": "auto",
+  "train_batch_size": "auto",
+  "train_micro_batch_size_per_gpu": "auto",
+  "gradient_accumulation_steps": "auto",
+  "steps_per_print": 1000000
+}

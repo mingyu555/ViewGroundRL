@@ -1,0 +1,42 @@
+# VGGDrive stage 1 — VLM 동결, CVGE 만 학습.
+# 논문 4.1: "we freeze the base VLM parameters and train only the parameters
+# introduced by CVGE for 2 epochs, using a learning rate of 1e-4 and a batch
+# size of 2."  VGGT 는 두 단계 내내 동결.
+model: /mnt/ssd4/mingyu/vgrl/base_qwen25vl7b
+vggt_weights: /mnt/ssd4/mingyu/vggdrive/vggt/model.pt
+
+train_file: /mnt/ssd4/mingyu/vgrl/data/dlmm_sft_train.json
+eval_file: /mnt/ssd4/mingyu/vgrl/data/dlmm_sft_val.json
+max_eval_rows: 200
+
+attn_implementation: sdpa
+# 2400x900 격자 한 장 = 2752 시각 토큰. 기존 SFT 와 같은 예산으로 둔다.
+max_pixels: 1204224
+max_length: 4096
+
+cvge:
+  in_dim: 2048      # VGGT aggregator 출력 (frame+global 어텐션 연결)
+  scale: 4          # 3584 -> 512 병목
+  num_heads: 8
+  dropout: 0.1
+
+output_dir: /mnt/ssd4/mingyu/vgrl_saves/sft_dlmm_7b_cvge_s1
+num_train_epochs: 2
+learning_rate: 1.0e-4
+per_device_train_batch_size: 2
+gradient_accumulation_steps: 2
+lr_scheduler_type: cosine
+warmup_ratio: 0.03
+weight_decay: 0.0
+max_grad_norm: 1.0
+bf16: true
+gradient_checkpointing: false     # 백본이 얼려 있어 활성값 재계산 이득이 없다
+logging_steps: 10
+eval_strategy: "no"
+save_strategy: steps
+save_steps: 500
+save_total_limit: 2
+report_to: []
+dataloader_num_workers: 4
+remove_unused_columns: false
+ddp_find_unused_parameters: false
